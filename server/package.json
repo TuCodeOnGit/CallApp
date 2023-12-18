@@ -1,5 +1,5 @@
 {
-  "name": "@vender/server",
+  "name": "@call/server",
   "version": "0.0.0-locked",
   "private": true,
   "dependencies": {

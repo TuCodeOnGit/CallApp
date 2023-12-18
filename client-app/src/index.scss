@@ -1,4 +1,51 @@
+* {
+  box-sizing: border-box;
+}
 html,
 body {
   font-family: Arial, Helvetica, sans-serif;
+  margin: 0;
+  height: 100%;
+}
+
+#root {
+  height: 100%;
+}
+
+.app {
+  height: 100%;
+  background-color: lightskyblue;
+}
+
+.app-container {
+  width: 800px;
+  margin: 0 auto;
+  padding-top: 10px;
+  padding-bottom: 10px;
+}
+
+.grid-layout {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 4px;
+}
+
+.video {
+  width: 100%;
+  height: 100%;
+  border-radius: 5px;
+}
+
+.controls {
+  position: relative;
+  display: flex;
+  justify-content: center;
+  margin-top: -40px;
+}
+
+.button {
+  width: 80px;
+  font-size: 20px;
+  background-color: #00A6ED;
+  border-radius: 5px;
 }

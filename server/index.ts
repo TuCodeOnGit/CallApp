@@ -12,6 +12,9 @@ const io = new Server(server, {
 });
 io.on("connection", (s: Socket) => {
     console.log('connect', s.id)
+    s.on("joinRoom", () => {
+      console.log(`socket id ${s.id} `)
+    })
 });
 const port = 4000;
 server
