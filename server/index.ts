@@ -27,22 +27,24 @@ io.on("connection", (s: Socket) => {
   })
   s.on('call', (d: { callId: string }) => {
     if (room.length <= 1) return
-    const caller: Socket = room.find(s => s.id == d.callId) as Socket
-    room.filter(s => s != caller).forEach((s: Socket) => {
+    const caller: Socket = room.find(s => s.id === d.callId) as Socket
+    room.filter(s => s !== caller).forEach((s: Socket) => {
       caller.emit('offer', {
         to: s.id
       })
     })
   })
   s.on('offer', (d: {to: string, offer: RTCSessionDescriptionInit }) => {
-    const so = room.find(s => s.id == d.to) as Socket
-    so.emit('receiveOffer', {
+    console.log(`${s.id} create offer to ${d.to}`)
+    const so = room.find(s => s.id === d.to) as Socket
+    so?.emit('receiveOffer', {
       from: s.id,
       offer: d.offer
     })
   })
   s.on('answer', (d: { to: string, answer: RTCSessionDescriptionInit }) => {
-    const so = room.find(s => s.id == d.to) as Socket
+    console.log(`${s.id} create answer to ${d.to}`)
+    const so = room.find(s => s.id === d.to) as Socket
     so.emit('receiveAnswer', {
       from: s.id,
       answer: d.answer
@@ -58,6 +60,7 @@ io.on("connection", (s: Socket) => {
   })
   s.on('disconnect', () => {
     room = room.filter(o => s.id !== o.id)
+    console.log(s.id + ' leave room.')
   })
 });
 

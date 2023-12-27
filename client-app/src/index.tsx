@@ -7,30 +7,30 @@ import { useEffect, useRef } from "react"
 
 import "./index.scss"
 
+let ws: Socket = io("localhost:4000")
+
+type RemoteUser = {
+  id: string;
+  stream?: MediaStream;
+  peer?: RTCPeerConnection
+}
 class State {
   constructor() {
     makeAutoObservable(this)
   }
   localStream?: MediaStream
-  remoteStreams: { 
-    [userId: string]: 
-    {  
-      stream?: MediaStream,
-      peer?: RTCPeerConnection 
-    } 
-  } = {}
+  remoteUsers: RemoteUser[] = []
   camOn = true
   micOn = true
   socketId: string
 
   toggleCam() {
+    console.log('toggle camera');
     this.camOn = !this.camOn
-    if (this.camOn) {
+    if (!this.camOn) {
+      state.localStream?.getVideoTracks().forEach((track) => track.stop())
+    } else {
       startLocalStream(state.camOn, state.micOn)
-    }
-    else {
-      state.localStream?.getVideoTracks()
-        .forEach((track) => track.stop())
     }
   }
   toggleMic() {
@@ -42,56 +42,79 @@ class State {
         .forEach((track) => track.stop())
     }
   }
-  setLocalStream(stream: MediaStream) {
-    this.localStream = stream
-  }
 }
-
 const state = new State()
 
-let ws: Socket = io("localhost:4000")
+const startLocalStream = (camOn: boolean, micOn: boolean) => {
+  navigator.mediaDevices
+    .getUserMedia({ video: camOn, audio: micOn })
+    .then((stream) => {
+      state.localStream = stream
+      console.log('length', state.remoteUsers.length)
+      if (state.remoteUsers.length > 0) {
+        state.remoteUsers.forEach(r => {
+          createPeerConnection(r.id)
+        })
+      }
+    })
+}
 
 const createPeerConnection = async (id: string, offerSdp?: RTCSessionDescriptionInit) => {
-  console.log('create peer connection for ' + id)
+  console.log('create peer connection to ' + id)
+  const remote = state.remoteUsers.find(r => r.id === id)
+  remote!.stream = new MediaStream(); // reset stream
   const configuration = { 'iceServers': [{ 'urls': ['stun:stun1.l.google.com:19302', 'stun:stun2.l.google.com:19302'] }] }
-  const peer = state.remoteStreams[id].peer = new RTCPeerConnection(configuration)
+  const peer = new RTCPeerConnection(configuration)
   peer.onicecandidate = onPeerIceCandidate
-  peer.ontrack = onPeerTrack
-  state.localStream?.getTracks().forEach(t => peer?.addTrack(t))
+  peer.ontrack = (e) => {
+    console.log('remote stream', remote?.stream)
+    onPeerTrack(e, remote?.stream)
+  }
+  remote!.peer = peer
+  state.localStream?.getTracks().forEach(t => remote!.peer?.addTrack(t))
   if (!offerSdp) {
-    const localSdp = await peer.createOffer()
-    peer.setLocalDescription(localSdp)
+    const localSdp = await remote!.peer!.createOffer({ iceRestart: true })
+    remote!.peer!.setLocalDescription(localSdp)
+    console.log('emit offer')
     ws.emit('offer', {
       to: id,
       offer: localSdp
     })
-    return
+  } else {
+    console.log('set remote')
+    remote!.peer!.setRemoteDescription(new RTCSessionDescription(offerSdp))
+    const localSdp = await remote!.peer!.createAnswer()
+    remote!.peer!.setLocalDescription(localSdp)
+    ws.emit('answer', {
+      to: id,
+      answer: localSdp
+    })
   }
-  peer.setRemoteDescription(new RTCSessionDescription(offerSdp))
-  const localSdp = await peer.createAnswer()
-  peer.setLocalDescription(localSdp)
-  ws.emit('answer', {
-    to: id,
-    answer: localSdp
-  })
 }
-const onPeerTrack = (e: RTCTrackEvent) => {
-  Object.keys(state.remoteStreams).forEach(key => {
-    state.remoteStreams[key].stream?.addTrack(e.track);
-  })
+
+
+const onPeerTrack = (e: RTCTrackEvent, stream?: MediaStream) => {
+  console.log('onpeertrack')
+  stream?.addTrack(e.track)
+}
+
+const onPeerIceCandidate = (e: RTCPeerConnectionIceEvent) => {
+  ws.emit('icecandidate', e.candidate)
 }
 
 const joinRoom = () => {
   ws.emit('joinRoom', { name: "Tu" })
 }
+
 const onJoinRoomSuccess = (d: { serverSocketId: string, room: string[] }) => {
   console.log('join room success', d.serverSocketId)
   state.socketId = d.serverSocketId
   d.room.forEach(id => {
-    if (!(id in state.remoteStreams) && id != state.socketId) {
-      state.remoteStreams[id] = {
-        stream: new MediaStream()
-      }
+    if (!(state.remoteUsers.some(r => r.id === id)) && id != state.socketId) {
+      state.remoteUsers.push({
+        id,
+        stream: new MediaStream(),
+      })
     }
   });
   ws.emit('call', {
@@ -99,25 +122,44 @@ const onJoinRoomSuccess = (d: { serverSocketId: string, room: string[] }) => {
   })
 }
 const onNewUserJoin = (d: { newUserId: string }) => {
-  state.remoteStreams[d.newUserId] = {
+  state.remoteUsers.push({
+    id: d.newUserId,
     stream: new MediaStream()
-  }
-  console.log(Object.keys(state.remoteStreams).length)
+  })
 }
 const onOffer = (d: { to: string }) => {
+  console.log('on offer')
   createPeerConnection(d.to)
 }
 const onReceiveOffer = (d: { from: string, offer: RTCSessionDescriptionInit }) => {
+  console.log('receiver offer', d.offer)
+  const remote = state.remoteUsers.find(r => r.id === d.from);
+  if (remote?.peer) {
+    cleanupPeer(remote.peer)
+  }
   createPeerConnection(d.from, d.offer)
 }
+const cleanupPeer = (peer: RTCPeerConnection | undefined) => {
+  if (!peer) {
+    return
+  }
+  peer.onicecandidate = null
+  peer.onicecandidateerror = null
+  peer.ontrack = null
+  peer.close()
+  peer = undefined
+}
 const onReceiveAnswer = (d: { from: string, answer: RTCSessionDescriptionInit }) => {
-  console.log('receiver answer', d.answer)
-  state.remoteStreams[d.from].peer?.setRemoteDescription(d.answer)
+  console.log('receive answer')
+  const remote = state.remoteUsers.find(r => r.id === d.from);
+  remote?.peer?.setRemoteDescription(d.answer)
+  console.log('set remote desc', d.answer)
 }
 const onWsIcecandidate = (d: { from: string, icecandidate: RTCIceCandidate | null }) => {
   console.log('on ws icecandidate')
   if (d.icecandidate) {
-    state.remoteStreams[d.from].peer?.addIceCandidate(new RTCIceCandidate(d.icecandidate))
+    const remote = state.remoteUsers.find(r => r.id === d.from);
+    remote?.peer?.addIceCandidate(new RTCIceCandidate(d.icecandidate))
     return
   }
 }
@@ -128,19 +170,6 @@ ws.on('offer', onOffer)
 ws.on('receiveOffer', onReceiveOffer)
 ws.on('receiveAnswer', onReceiveAnswer)
 ws.on('icecandidate', onWsIcecandidate)
-
-
-const startLocalStream = (camOn: boolean, micOn: boolean) => {
-  navigator.mediaDevices
-    .getUserMedia({ video: camOn, audio: micOn })
-    .then((stream) => {
-      state.setLocalStream(stream)
-    })
-}
-
-const onPeerIceCandidate = (e: RTCPeerConnectionIceEvent) => {
-  ws.emit('icecandidate', e.candidate)
-}
 
 const Video = ({
   stream,
@@ -159,7 +188,7 @@ const Video = ({
   return (
     <div className="video-wrapper">
       name: {name}
-      <video className="video" ref={ref} playsInline autoPlay muted></video>
+      <video className="video" ref={ref} playsInline autoPlay></video>
       {children}
     </div>
   )
@@ -182,6 +211,10 @@ const App = observer(() => {
   useEffect(() => {
     startLocalStream(true, true)
   }, [])
+  useEffect(() => {
+    console.log('remote streams');
+
+  }, [JSON.stringify(state.remoteUsers)])
   return (
     <div className="app">
       <div className="app-container">
@@ -191,8 +224,7 @@ const App = observer(() => {
           <Video name={state.socketId} stream={state.localStream}>
             <Controls />
           </Video>
-          {Object.keys(state.remoteStreams)
-            .map(id => <Video key={id} stream={state.remoteStreams[id].stream} name={id} />)}
+          {state.remoteUsers.map(u => <Video key={u.id} name={u.id} stream={u.stream} />)}
         </div>
       </div>
     </div>
